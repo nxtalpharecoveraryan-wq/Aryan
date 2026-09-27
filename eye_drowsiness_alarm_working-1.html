@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eye Drowsiness Alarm</title>
+<style>
+body{font-family:Arial,sans-serif;background:#111;color:#fff;text-align:center;margin:0;padding:18px}
+h2{margin:8px 0 6px}.box{max-width:520px;margin:auto}
+video{width:100%;border-radius:14px;background:#222;transform:scaleX(-1)}
+#status{font-size:24px;font-weight:bold;margin:14px;padding:12px;border-radius:10px;background:#176b2c}
+button{font-size:18px;padding:12px 20px;border:0;border-radius:10px;margin:8px;cursor:pointer}
+small{color:#bbb;display:block;margin-top:12px}
+</style>
+</head>
+<body>
+<div class="box">
+<h2>👁️ Eye Drowsiness Alarm</h2>
+<div id="status">Press START</div>
+<video id="video" autoplay playsinline></video>
+<br>
+<button id="start">START</button>
+<button id="stop">STOP</button>
+<small>Keep your face clearly visible. Close both eyes for about 0.8 seconds to trigger the alarm.</small>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+
+<script>
+const video=document.getElementById("video");
+const status=document.getElementById("status");
+let camera=null, running=false, eyesClosedSince=null, alarmOn=false;
+let audioCtx=null, osc=null, gain=null;
+
+function eyeEAR(p,top,bottom,left,right){
+  const vertical=Math.hypot(
+    p[top].x-p[bottom].x,
+    p[top].y-p[bottom].y
+  );
+  const horizontal=Math.hypot(
+    p[left].x-p[right].x,
+    p[left].y-p[right].y
+  );
+  return vertical/(horizontal||1);
+}
+
+function startAlarm(){
+  if(alarmOn)return;
+  alarmOn=true;
+  if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state==="suspended") audioCtx.resume();
+  osc=audioCtx.createOscillator(); gain=audioCtx.createGain();
+  osc.type="square"; osc.frequency.value=850; gain.gain.value=0.12;
+  osc.connect(gain); gain.connect(audioCtx.destination); osc.start();
+  let high=true;
+  window.sirenTimer=setInterval(()=>{
+    if(osc) { high=!high; osc.frequency.setValueAtTime(high?850:500,audioCtx.currentTime); }
+  },220);
+}
+
+function stopAlarm(){
+  if(!alarmOn)return;
+  alarmOn=false;
+  clearInterval(window.sirenTimer);
+  if(osc){try{osc.stop()}catch(e){} osc.disconnect(); osc=null}
+}
+
+const faceMesh=new FaceMesh({
+  locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
+faceMesh.setOptions({
+  maxNumFaces:1, refineLandmarks:true,
+  minDetectionConfidence:.6, minTrackingConfidence:.6
+});
+
+faceMesh.onResults(results=>{
+  if(!running)return;
+  if(!results.multiFaceLandmarks || !results.multiFaceLandmarks.length){
+    status.textContent="NO FACE";
+    status.style.background="#555";
+    eyesClosedSince=null; stopAlarm(); return;
+  }
+  const p=results.multiFaceLandmarks[0];
+
+  // MediaPipe Face Mesh eye landmarks.
+  const leftV=eyeEAR(p,159,145,33,133);
+  const rightV=eyeEAR(p,386,374,362,263);
+
+  // Smaller value = more closed. Threshold can be adjusted.
+  const closed=(leftV<0.20 && rightV<0.20);
+
+  if(closed){
+    if(eyesClosedSince===null) eyesClosedSince=performance.now();
+    const ms=performance.now()-eyesClosedSince;
+    status.textContent="😴 DROWSY — SIREN ON";
+    status.style.background="#9b1c1c";
+    if(ms>800) startAlarm();
+  }else{
+    eyesClosedSince=null;
+    stopAlarm();
+    status.textContent="🟢 AWAKE — SIREN OFF";
+    status.style.background="#176b2c";
+  }
+});
+
+document.getElementById("start").onclick=async()=>{
+  try{
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    await audioCtx.resume();
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"},audio:false});
+    video.srcObject=stream;
+    running=true;
+    camera=new Camera(video,{
+      onFrame:async()=>{await faceMesh.send({image:video});},
+      width:640,height:480
+    });
+    camera.start();
+    status.textContent="🟢 AWAKE — SIREN OFF";
+    status.style.background="#176b2c";
+  }catch(e){
+    status.textContent="Camera permission/error";
+    status.style.background="#9b1c1c";
+    alert("Camera permission allow karo. Error: "+e.message);
+  }
+};
+
+document.getElementById("stop").onclick=()=>{
+  running=false;
+  stopAlarm();
+  eyesClosedSince=null;
+  if(camera) {
+    try { camera.stop(); } catch(e) {}
+  }
+  if(video.srcObject) {
+    video.srcObject.getTracks().forEach(t=>t.stop());
+  }
+  video.srcObject=null;
+  status.textContent="STOPPED";
+  status.style.background="#555";
+};
+</script>
+</body>
+</html>
