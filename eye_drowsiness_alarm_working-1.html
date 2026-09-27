@@ -1,144 +1,486 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Eye Drowsiness Alarm</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+
+<title>Eye Siren AI</title>
+
 <style>
-body{font-family:Arial,sans-serif;background:#111;color:#fff;text-align:center;margin:0;padding:18px}
-h2{margin:8px 0 6px}.box{max-width:520px;margin:auto}
-video{width:100%;border-radius:14px;background:#222;transform:scaleX(-1)}
-#status{font-size:24px;font-weight:bold;margin:14px;padding:12px;border-radius:10px;background:#176b2c}
-button{font-size:18px;padding:12px 20px;border:0;border-radius:10px;margin:8px;cursor:pointer}
-small{color:#bbb;display:block;margin-top:12px}
+*{
+    box-sizing:border-box;
+}
+
+body{
+    margin:0;
+    background:#05070b;
+    color:white;
+    font-family:Arial,sans-serif;
+    text-align:center;
+}
+
+h1{
+    margin-top:25px;
+    letter-spacing:3px;
+}
+
+p{
+    color:#999;
+}
+
+#cameraBox{
+    width:94%;
+    max-width:600px;
+    margin:20px auto;
+    border-radius:20px;
+    overflow:hidden;
+    background:#111;
+}
+
+video{
+    width:100%;
+    display:block;
+    transform:scaleX(-1);
+}
+
+#status{
+    width:90%;
+    max-width:500px;
+    margin:15px auto;
+    padding:18px;
+    border-radius:15px;
+    font-size:24px;
+    font-weight:bold;
+    background:#172018;
+    color:#00ff66;
+}
+
+button{
+    padding:15px 22px;
+    margin:8px;
+    border:0;
+    border-radius:12px;
+    font-size:17px;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+#start{
+    background:#00ff66;
+}
+
+#stop{
+    background:#ff3333;
+    color:white;
+}
+
+#message{
+    min-height:25px;
+    color:#ff4444;
+}
+
+.drowsy{
+    background:#300808 !important;
+    color:#ff3333 !important;
+}
+
+.awake{
+    background:#082514 !important;
+    color:#00ff66 !important;
+}
 </style>
 </head>
+
 <body>
-<div class="box">
-<h2>👁️ Eye Drowsiness Alarm</h2>
-<div id="status">Press START</div>
-<video id="video" autoplay playsinline></video>
-<br>
-<button id="start">START</button>
-<button id="stop">STOP</button>
-<small>Keep your face clearly visible. Close both eyes for about 0.8 seconds to trigger the alarm.</small>
+
+<h1>👁️ EYE SIREN AI</h1>
+
+<p>Close your eyes → Siren ON</p>
+
+<div id="cameraBox">
+    <video id="video" autoplay playsinline muted></video>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<div id="status" class="awake">
+    CAMERA OFF
+</div>
+
+<div id="message"></div>
+
+<button id="start">
+    📷 START CAMERA
+</button>
+
+<button id="stop">
+    🔇 STOP SIREN
+</button>
+
+
+<!-- MediaPipe Face Mesh -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 
 <script>
-const video=document.getElementById("video");
-const status=document.getElementById("status");
-let camera=null, running=false, eyesClosedSince=null, alarmOn=false;
-let audioCtx=null, osc=null, gain=null;
 
-function eyeEAR(p,top,bottom,left,right){
-  const vertical=Math.hypot(
-    p[top].x-p[bottom].x,
-    p[top].y-p[bottom].y
-  );
-  const horizontal=Math.hypot(
-    p[left].x-p[right].x,
-    p[left].y-p[right].y
-  );
-  return vertical/(horizontal||1);
-}
+const video = document.getElementById("video");
+const statusBox = document.getElementById("status");
+const message = document.getElementById("message");
 
-function startAlarm(){
-  if(alarmOn)return;
-  alarmOn=true;
-  if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-  if(audioCtx.state==="suspended") audioCtx.resume();
-  osc=audioCtx.createOscillator(); gain=audioCtx.createGain();
-  osc.type="square"; osc.frequency.value=850; gain.gain.value=0.12;
-  osc.connect(gain); gain.connect(audioCtx.destination); osc.start();
-  let high=true;
-  window.sirenTimer=setInterval(()=>{
-    if(osc) { high=!high; osc.frequency.setValueAtTime(high?850:500,audioCtx.currentTime); }
-  },220);
-}
+let cameraStream = null;
+let sirenOn = false;
 
-function stopAlarm(){
-  if(!alarmOn)return;
-  alarmOn=false;
-  clearInterval(window.sirenTimer);
-  if(osc){try{osc.stop()}catch(e){} osc.disconnect(); osc=null}
-}
+let audioContext = null;
+let oscillator = null;
+let gain = null;
 
-const faceMesh=new FaceMesh({
-  locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+let closedCount = 0;
+let openCount = 0;
+
+
+// ============================
+// START BUTTON
+// ============================
+
+document.getElementById("start").addEventListener("click", async function(){
+
+    message.innerText = "Starting camera...";
+
+    try{
+
+        // Ask camera permission
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+            video:{
+                facingMode:"user"
+            },
+            audio:false
+        });
+
+        video.srcObject = cameraStream;
+
+        await video.play();
+
+        message.innerText = "Camera started";
+
+        statusBox.innerText = "🟢 AWAKE";
+        statusBox.className = "awake";
+
+        // Start FaceMesh
+        faceMesh.send({
+            image:video
+        });
+
+    }
+    catch(error){
+
+        console.log(error);
+
+        message.innerText =
+        "Camera permission allow karo.";
+
+        statusBox.innerText = "CAMERA ERROR";
+    }
+
 });
+
+
+// ============================
+// STOP SIREN BUTTON
+// ============================
+
+document.getElementById("stop").addEventListener("click", function(){
+
+    stopSiren();
+
+    message.innerText = "Siren stopped";
+});
+
+
+// ============================
+// FACE MESH
+// ============================
+
+const faceMesh = new FaceMesh({
+
+    locateFile: function(file){
+
+        return "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/" + file;
+    }
+
+});
+
+
 faceMesh.setOptions({
-  maxNumFaces:1, refineLandmarks:true,
-  minDetectionConfidence:.6, minTrackingConfidence:.6
+
+    maxNumFaces:1,
+
+    refineLandmarks:true,
+
+    minDetectionConfidence:0.5,
+
+    minTrackingConfidence:0.5
+
 });
 
-faceMesh.onResults(results=>{
-  if(!running)return;
-  if(!results.multiFaceLandmarks || !results.multiFaceLandmarks.length){
-    status.textContent="NO FACE";
-    status.style.background="#555";
-    eyesClosedSince=null; stopAlarm(); return;
-  }
-  const p=results.multiFaceLandmarks[0];
 
-  // MediaPipe Face Mesh eye landmarks.
-  const leftV=eyeEAR(p,159,145,33,133);
-  const rightV=eyeEAR(p,386,374,362,263);
+// ============================
+// FACE RESULT
+// ============================
 
-  // Smaller value = more closed. Threshold can be adjusted.
-  const closed=(leftV<0.20 && rightV<0.20);
+faceMesh.onResults(function(results){
 
-  if(closed){
-    if(eyesClosedSince===null) eyesClosedSince=performance.now();
-    const ms=performance.now()-eyesClosedSince;
-    status.textContent="😴 DROWSY — SIREN ON";
-    status.style.background="#9b1c1c";
-    if(ms>800) startAlarm();
-  }else{
-    eyesClosedSince=null;
-    stopAlarm();
-    status.textContent="🟢 AWAKE — SIREN OFF";
-    status.style.background="#176b2c";
-  }
+    if(
+        !results.multiFaceLandmarks ||
+        results.multiFaceLandmarks.length === 0
+    ){
+
+        statusBox.innerText = "FACE NOT FOUND";
+
+        return;
+    }
+
+    const face =
+    results.multiFaceLandmarks[0];
+
+
+    // LEFT EYE
+
+    const leftTop = face[159];
+    const leftBottom = face[145];
+    const leftLeft = face[33];
+    const leftRight = face[133];
+
+
+    // RIGHT EYE
+
+    const rightTop = face[386];
+    const rightBottom = face[374];
+    const rightLeft = face[362];
+    const rightRight = face[263];
+
+
+    const leftVertical =
+        distance(leftTop,leftBottom);
+
+    const leftHorizontal =
+        distance(leftLeft,leftRight);
+
+
+    const rightVertical =
+        distance(rightTop,rightBottom);
+
+    const rightHorizontal =
+        distance(rightLeft,rightRight);
+
+
+    const leftRatio =
+        leftVertical / leftHorizontal;
+
+    const rightRatio =
+        rightVertical / rightHorizontal;
+
+
+    const eyeRatio =
+        (leftRatio + rightRatio) / 2;
+
+
+    console.log("Eye ratio:",eyeRatio);
+
+
+    // ============================
+    // EYES CLOSED
+    // ============================
+
+    if(eyeRatio < 0.20){
+
+        closedCount++;
+        openCount=0;
+
+
+        if(closedCount > 6){
+
+            statusBox.innerText =
+            "🔴 EYES CLOSED";
+
+            statusBox.className =
+            "drowsy";
+
+            startSiren();
+        }
+
+    }
+
+
+    // ============================
+    // EYES OPEN
+    // ============================
+
+    else{
+
+        openCount++;
+        closedCount=0;
+
+
+        if(openCount > 3){
+
+            statusBox.innerText =
+            "🟢 AWAKE";
+
+            statusBox.className =
+            "awake";
+
+            stopSiren();
+        }
+    }
+
 });
 
-document.getElementById("start").onclick=async()=>{
-  try{
-    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-    await audioCtx.resume();
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"},audio:false});
-    video.srcObject=stream;
-    running=true;
-    camera=new Camera(video,{
-      onFrame:async()=>{await faceMesh.send({image:video});},
-      width:640,height:480
-    });
-    camera.start();
-    status.textContent="🟢 AWAKE — SIREN OFF";
-    status.style.background="#176b2c";
-  }catch(e){
-    status.textContent="Camera permission/error";
-    status.style.background="#9b1c1c";
-    alert("Camera permission allow karo. Error: "+e.message);
-  }
-};
 
-document.getElementById("stop").onclick=()=>{
-  running=false;
-  stopAlarm();
-  eyesClosedSince=null;
-  if(camera) {
-    try { camera.stop(); } catch(e) {}
-  }
-  if(video.srcObject) {
-    video.srcObject.getTracks().forEach(t=>t.stop());
-  }
-  video.srcObject=null;
-  status.textContent="STOPPED";
-  status.style.background="#555";
-};
+// ============================
+// DISTANCE
+// ============================
+
+function distance(a,b){
+
+    const x =
+        a.x-b.x;
+
+    const y =
+        a.y-b.y;
+
+    return Math.sqrt(
+        x*x+y*y
+    );
+}
+
+
+// ============================
+// SIREN
+// ============================
+
+function startSiren(){
+
+    if(sirenOn) return;
+
+    sirenOn=true;
+
+    message.innerText =
+    "🚨 SIREN ON 🚨";
+
+
+    audioContext =
+    new (
+        window.AudioContext ||
+        window.webkitAudioContext
+    )();
+
+
+    oscillator =
+    audioContext.createOscillator();
+
+    gain =
+    audioContext.createGain();
+
+
+    oscillator.type =
+    "sawtooth";
+
+
+    oscillator.frequency.value =
+    900;
+
+
+    gain.gain.value =
+    0.20;
+
+
+    oscillator.connect(gain);
+
+    gain.connect(
+        audioContext.destination
+    );
+
+
+    oscillator.start();
+
+
+    let high=true;
+
+
+    window.sirenTimer =
+    setInterval(function(){
+
+        if(!sirenOn) return;
+
+        oscillator.frequency.value =
+        high ? 1300 : 600;
+
+        high=!high;
+
+    },300);
+
+}
+
+
+// ============================
+// STOP SIREN
+// ============================
+
+function stopSiren(){
+
+    if(!sirenOn) return;
+
+    sirenOn=false;
+
+
+    message.innerText="";
+
+
+    clearInterval(
+        window.sirenTimer
+    );
+
+
+    try{
+
+        oscillator.stop();
+
+    }catch(e){}
+
+
+    try{
+
+        audioContext.close();
+
+    }catch(e){}
+
+
+    oscillator=null;
+
+    audioContext=null;
+}
+
+
+// ============================
+// CAMERA LOOP
+// ============================
+
+async function cameraLoop(){
+
+    if(
+        cameraStream &&
+        video.readyState >= 2
+    ){
+
+        await faceMesh.send({
+            image:video
+        });
+    }
+
+    requestAnimationFrame(cameraLoop);
+}
+
+cameraLoop();
+
 </script>
+
 </body>
-</html>
+  </html>
